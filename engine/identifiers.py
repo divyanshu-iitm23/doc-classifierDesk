@@ -1,9 +1,38 @@
+"""
+identifiers.py
+--------------
+The single source of truth for every supported Indian KYC document type.
+
+Each document type is defined by:
+  - a strict regex for its unique identifier (matched against whole tokens),
+  - a normaliser that strips spaces/hyphens so "XXXX XXXX XXXX" -> "XXXXXXXXXXXX",
+  - a validator key (which checksum / structural rule to apply),
+  - context keywords that boost confidence when present.
+
+This is what makes the engine document-type-aware rather than a blind OCR dump.
+"""
+
 import re
+
+# -----------------------------------------------------------------------------
+# IDENTIFIER FORMATS  (Indian documents)
+# -----------------------------------------------------------------------------
+#  Aadhaar  : 12 digits          e.g. 2345 6789 0123   (Verhoeff checksum, 1st digit 2-9)
+#  PAN      : 10 chars  AAAAA9999A   5 letters + 4 digits + 1 letter
+#  VoterID  : 10 chars  AAA9999999   3 letters + 7 digits   (EPIC number)
+#  DL       : 15 chars  AA9999999999999  2-letter state + 13 digits  (real-world format)
+#             (the BRD says "15 digits"; real DLs always carry a 2-letter state code,
+#              so we require the state-code prefix — a pure 15-digit number is rejected
+#              because it collides with the MICR / transaction code printed on cheques)
+#  Passport : 8 chars   A9999999    1 letter + 7 digits
+# -----------------------------------------------------------------------------
 
 DOCUMENT_SPECS = {
     "AADHAAR": {
         "display_name": "Aadhaar Card",
+        # match raw text incl. the common 4-4-4 spaced grouping
         "raw_regex": re.compile(r"(?<!\d)(\d{4}\s?\d{4}\s?\d{4})(?!\d)"),
+        # after normalising (spaces removed) the token must be exactly this
         "token_regex": re.compile(r"^\d{12}$"),
         "length": 12,
         "validator": "aadhaar_verhoeff",
@@ -36,10 +65,13 @@ DOCUMENT_SPECS = {
     },
     "DL": {
         "display_name": "Driving Licence",
+        # canonical: 2-letter state + 13 digits, optionally separated by space/hyphen.
+        # (The pure 15-digit form was removed: it matched unrelated 15-digit numbers
+        # such as the MICR / transaction code on cheques, causing false positives.)
         "raw_regex": re.compile(
-            r"(?<![A-Z0-9])([A-Z]{2}[\s-]?\d{2}[\s-]?\d{4}[\s-]?\d{7}|\d{15})(?![A-Z0-9])"
+            r"(?<![A-Z0-9])([A-Z]{2}[\s-]?\d{2}[\s-]?\d{4}[\s-]?\d{7})(?![A-Z0-9])"
         ),
-        "token_regex": re.compile(r"^([A-Z]{2}\d{13}|\d{15})$"),
+        "token_regex": re.compile(r"^[A-Z]{2}\d{13}$"),
         "length": 15,
         "validator": "dl_structure",
         "keywords": [
@@ -49,26 +81,188 @@ DOCUMENT_SPECS = {
     },
     "PASSPORT": {
         "display_name": "Passport",
-        "raw_regex": re.compile(r"(?<![A-Z0-9])(?:[A-Z]\d{7}|[A-Z]{2}\d{6})(?![A-Z0-9])"),
-        "token_regex": re.compile(r"^(?:[A-Z]\d{7}|[A-Z]{2}\d{6})$"),
+        "raw_regex": re.compile(r"(?<![A-Z0-9])([A-Z]\d{7})(?![A-Z0-9])"),
+        "token_regex": re.compile(r"^[A-Z]\d{7}$"),
         "length": 8,
         "validator": "passport_structure",
+        # NOTE: dropped over-generic words ("type", "ind") that match on many
+        # documents (e.g. a passbook's "Account Type") and caused false positives.
         "keywords": [
             "passport", "republic of india", "place of issue", "country code",
-            "type", "nationality", "ind",
+            "nationality", "given name", "surname",
+        ],
+    },
+
+    # -------------------------------------------------------------------------
+    # BANK DOCUMENTS
+    # -------------------------------------------------------------------------
+    # Bank statements and passbooks don't have a single unique-format ID like the
+    # cards above. What they DO share is an IFSC code (AAAA0XXXXXX), which marks a
+    # document as a "bank document". Telling a statement from a passbook is then a
+    # KEYWORD/PHRASE decision, not an identifier decision - so these two types use
+    # a different scoring path (see classifier._score_bank). The IFSC regex/length
+    # here are used to establish the shared "this is a bank document" signal.
+    "BANK_STATEMENT": {
+        "display_name": "Bank Statement",
+        "doc_class": "bank",
+        "raw_regex": re.compile(r"(?<![A-Z0-9])([A-Z]{4}0[A-Z0-9]{6})(?![A-Z0-9])"),
+        "token_regex": re.compile(r"^[A-Z]{4}0[A-Z0-9]{6}$"),
+        "length": 11,
+        "validator": "ifsc_structure",
+        # shared bank context (also present on passbooks)
+        "keywords": [
+            "ifsc", "account number", "a/c no", "branch", "micr",
+            "bank", "savings", "current account",
+        ],
+        # phrases that point specifically to a STATEMENT
+        "distinctive": [
+            "statement of account", "account statement", "statement period",
+            "opening balance", "closing balance", "transaction details",
+            "withdrawal", "deposit", "debit", "credit", "balance",
+            "from date", "to date", "narration", "value date", "cheque no",
+            "statement of transactions", "available balance",
+        ],
+    },
+    "BANK_PASSBOOK": {
+        "display_name": "Bank Passbook",
+        "doc_class": "bank",
+        "raw_regex": re.compile(r"(?<![A-Z0-9])([A-Z]{4}0[A-Z0-9]{6})(?![A-Z0-9])"),
+        "token_regex": re.compile(r"^[A-Z]{4}0[A-Z0-9]{6}$"),
+        "length": 11,
+        "validator": "ifsc_structure",
+        "keywords": [
+            "ifsc", "account number", "a/c no", "branch", "micr",
+            "bank", "savings", "current account",
+        ],
+        # phrases that point specifically to a PASSBOOK
+        "distinctive": [
+            "passbook", "pass book", "customer id", "cust id",
+            "savings bank account", "sb account", "account holder",
+            "nominee", "branch name", "branch code", "date of issue",
+            "mode of operation", "scheme", "joint holder",
+        ],
+    },
+    "CHEQUE": {
+        "display_name": "Bank Cheque",
+        "doc_class": "bank",
+        "raw_regex": re.compile(r"(?<![A-Z0-9])([A-Z]{4}0[A-Z0-9]{6})(?![A-Z0-9])"),
+        "token_regex": re.compile(r"^[A-Z]{4}0[A-Z0-9]{6}$"),
+        "length": 11,
+        "validator": "ifsc_structure",
+        "keywords": [
+            "ifsc", "bank", "branch", "micr", "neft", "payable",
+        ],
+        # phrases that point specifically to a CHEQUE. OCR is noisy on cheques,
+        # so this list favours the markers that survive OCR cleanly (seen across
+        # every variant in real-cheque testing): the validity notice, the date-box
+        # template, "payable at par", and the payee/bearer instruction.
+        "distinctive": [
+            "valid for three months", "three months only", "months only",
+            "payable at par", "ac payee", "a/c payee", "account payee",
+            "or bearer", "or order", "ddmmyyyy", "neft ifs code",
+            "ifs code", "pay ", "rupees",
+        ],
+    },
+
+    # -------------------------------------------------------------------------
+    # RECEIPT-CLASS DOCUMENTS (invoice / insurance / road-tax)
+    # -------------------------------------------------------------------------
+    # These have no single rigid identifier, so they are scored by distinctive
+    # phrases (see classifier._score_receipt), with an optional structured anchor
+    # where one exists: GSTIN for invoices, vehicle-registration for road tax.
+    # Insurance receipts have no standard identifier, so they are phrase-only.
+    "INVOICE": {
+        "display_name": "Invoice",
+        "doc_class": "receipt",
+        # GSTIN anchor: 2-digit state + 10-char PAN + entity + Z + check
+        "anchor_regex": re.compile(
+            r"(?<![A-Z0-9])(\d{2}[A-Z]{5}\d{4}[A-Z][0-9A-Z][A-Z][0-9A-Z])(?![A-Z0-9])"
+        ),
+        "anchor_validator": "gstin_structure",
+        "distinctive": [
+            "tax invoice", "invoice", "invoice no", "invoice number",
+            "invoice date", "bill to", "ship to", "billed to", "hsn", "sac",
+            "cgst", "sgst", "igst", "taxable value", "place of supply",
+            "purchase order", "po no", "po number", "quantity", "qty",
+            "unit price", "amount in words", "e-invoice", "irn", "gstin",
+            "total amount", "grand total", "sub total", "subtotal",
+        ],
+    },
+    "INSURANCE": {
+        "display_name": "Insurance Receipt",
+        "doc_class": "receipt",
+        "anchor_regex": None,           # no standardised policy-number format
+        "anchor_validator": None,
+        "distinctive": [
+            "policy", "policy no", "policy number", "premium", "premium receipt",
+            "sum assured", "sum insured", "insured", "insurer", "policyholder",
+            "policy holder", "nominee", "irdai", "irda", "renewal", "maturity",
+            "life insurance", "health insurance", "motor insurance",
+            "vehicle insurance", "general insurance", "proposal", "coverage",
+            "policy period", "assurance", "underwriting", "no claim bonus",
+        ],
+    },
+    "ROAD_TAX": {
+        "display_name": "Road Tax Receipt",
+        "doc_class": "receipt",
+        # vehicle-registration anchor: SS NN L(1-3) NNNN
+        "anchor_regex": re.compile(
+            r"(?<![A-Z0-9])([A-Z]{2}[\s-]?\d{1,2}[\s-]?[A-Z]{1,3}[\s-]?\d{4})(?![A-Z0-9])"
+        ),
+        "anchor_validator": "vehicle_reg_structure",
+        "distinctive": [
+            "road tax", "motor vehicle tax", "mv tax", "vehicle tax", "tax token",
+            "registration number", "regn no", "regn number", "rto",
+            "transport department", "regional transport", "chassis", "engine number",
+            "fitness", "permit", "vehicle class", "tax receipt", "one time tax",
+            "lifetime tax", "validity", "registration mark", "owner name",
+            "fee receipt", "tax paid", "vahan",
         ],
     },
 }
 
+# Document types that use the bank scoring path rather than the identifier path.
+BANK_TYPES = {k for k, v in DOCUMENT_SPECS.items() if v.get("doc_class") == "bank"}
+
+# Document types that use the receipt scoring path (phrases + optional anchor).
+RECEIPT_TYPES = {k for k, v in DOCUMENT_SPECS.items() if v.get("doc_class") == "receipt"}
+
 
 def normalise(raw_match: str) -> str:
+    """Strip spaces and hyphens so a spaced/grouped identifier becomes a clean token."""
     return re.sub(r"[\s-]", "", raw_match).upper()
-_TO_DIGIT = str.maketrans({"O": "0", "Q": "0", "D": "0", "I": "1", "L": "1",
-                            "Z": "2", "S": "5", "B": "8", "G": "6", "T": "7"})
-_TO_LETTER = str.maketrans({"0": "O", "1": "I", "5": "S", "8": "B", "6": "G", "2": "Z"})
+
+
+# -----------------------------------------------------------------------------
+# OCR-NOISE TOLERANCE
+# -----------------------------------------------------------------------------
+# OCR confuses visually similar glyphs. When a near-miss token doesn't fit a
+# document's shape, we try swapping these into the position the shape expects.
+# These cover the letter<->digit confusions that actually occur in practice.
+_TO_DIGIT = str.maketrans({
+    "O": "0", "Q": "0", "D": "0",
+    "I": "1", "L": "1", "|": "1",
+    "Z": "2",
+    "E": "3",
+    "A": "4",
+    "S": "5",
+    "G": "6",
+    "T": "7",
+    "B": "8",
+    "g": "9", "q": "9",
+})
+_TO_LETTER = str.maketrans({
+    "0": "O", "1": "I", "2": "Z", "3": "E", "4": "A",
+    "5": "S", "6": "G", "7": "T", "8": "B",
+})
 
 
 def ocr_repair(token: str, shape: str) -> str:
+    """
+    Coerce each character of `token` toward the expected `shape`, where shape is a
+    string of 'A' (letter expected) and '9' (digit expected), same length as token.
+    Returns the repaired token (may still be invalid; the validator decides).
+    """
     if len(token) != len(shape):
         return token
     out = []
@@ -81,10 +275,15 @@ def ocr_repair(token: str, shape: str) -> str:
             out.append(ch)
     return "".join(out)
 
+
+# expected character shape per document type, used by ocr_repair
 SHAPES = {
-    "AADHAAR":  "999999999999",
+    "AADHAAR":  "9" * 12,
     "PAN":      "AAAAA9999A",
     "VOTER_ID": "AAA9999999",
-    "DL":       "AA9999999999999",   
-    "PASSPORT": ["A9999999", "AA999999"]
+    "DL":       "AA9999999999999",   # canonical 2-letter + 13-digit form
+    "PASSPORT": "A9999999",
+    "BANK_STATEMENT": "AAAA0AAAAAA",  # IFSC: 4 letters + 0 + 6 alnum
+    "BANK_PASSBOOK":  "AAAA0AAAAAA",
+    "CHEQUE":         "AAAA0AAAAAA",
 }

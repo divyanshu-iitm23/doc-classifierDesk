@@ -22,7 +22,7 @@ import tempfile
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-from engine import classify_pdf
+from engine import classify_file
 
 app = Flask(__name__)
 CORS(app)
@@ -37,7 +37,7 @@ def _save_and_classify(file_storage, lang):
         file_storage.save(tmp.name)
         tmp_path = tmp.name
     try:
-        result = classify_pdf(tmp_path, ocr_lang=lang)
+        result = classify_file(tmp_path, ocr_lang=lang)
         result["file"] = file_storage.filename
         return result
     finally:
