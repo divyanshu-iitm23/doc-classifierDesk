@@ -24,8 +24,6 @@ Design notes:
   • ID documents (Aadhaar, Passport, DL, Voter ID) share identical fields
     (name, DOB, address, document_type, document_id) so they live in one table
     with `document_type` as a discriminator.
-  • PAN has a distinct identifier format (AAAAA9999A) that is best served as its
-    own primary key (`pan_no`), hence a dedicated table.
   • Detailed / unstructured documents (bank statements, invoices, insurance,
     road-tax receipts) are chunked for vector search; only metadata is stored
     here — the actual embeddings live in the vector DB.
