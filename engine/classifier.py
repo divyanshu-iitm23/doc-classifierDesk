@@ -73,7 +73,7 @@ def _find_candidates(text: str, spec, doc_type, lenient: bool = False):
     """
     found = []
     target_len = spec["length"]
-    shape = identifiers.SHAPES[doc_type]
+    shape = identifiers.SHAPES.get(doc_type)
 
     # ---- Pass 1: strict ----
     for m in spec["raw_regex"].finditer(text):
@@ -85,6 +85,11 @@ def _find_candidates(text: str, spec, doc_type, lenient: bool = False):
         return found
 
     # ---- Pass 2: fuzzy OCR repair ----
+    # Skip if the document type has no single shape (e.g. PASSPORT with two
+    # possible formats) — repair needs a fixed shape to coerce toward.
+    if shape is None:
+        return found
+
     # GUARD (strict only): a repaired token is trusted only if the document also
     # carries a context keyword for THIS type, so a misread date can't become a
     # fake passport number. In lenient mode (dummy-doc testing) we drop this guard.

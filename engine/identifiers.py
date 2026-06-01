@@ -24,15 +24,13 @@ import re
 #             (the BRD says "15 digits"; real DLs always carry a 2-letter state code,
 #              so we require the state-code prefix — a pure 15-digit number is rejected
 #              because it collides with the MICR / transaction code printed on cheques)
-#  Passport : 8 chars   A9999999    1 letter + 7 digits
+#  Passport : 8 chars   A9999999    1 letter + 7 digits  OR  AA999999  2 letters + 6 digits
 # -----------------------------------------------------------------------------
 
 DOCUMENT_SPECS = {
     "AADHAAR": {
         "display_name": "Aadhaar Card",
-        # match raw text incl. the common 4-4-4 spaced grouping
         "raw_regex": re.compile(r"(?<!\d)(\d{4}\s?\d{4}\s?\d{4})(?!\d)"),
-        # after normalising (spaces removed) the token must be exactly this
         "token_regex": re.compile(r"^\d{12}$"),
         "length": 12,
         "validator": "aadhaar_verhoeff",
@@ -65,9 +63,6 @@ DOCUMENT_SPECS = {
     },
     "DL": {
         "display_name": "Driving Licence",
-        # canonical: 2-letter state + 13 digits, optionally separated by space/hyphen.
-        # (The pure 15-digit form was removed: it matched unrelated 15-digit numbers
-        # such as the MICR / transaction code on cheques, causing false positives.)
         "raw_regex": re.compile(
             r"(?<![A-Z0-9])([A-Z]{2}[\s-]?\d{2}[\s-]?\d{4}[\s-]?\d{7})(?![A-Z0-9])"
         ),
@@ -81,27 +76,15 @@ DOCUMENT_SPECS = {
     },
     "PASSPORT": {
         "display_name": "Passport",
-        "raw_regex": re.compile(r"(?<![A-Z0-9])([A-Z]\d{7})(?![A-Z0-9])"),
-        "token_regex": re.compile(r"^[A-Z]\d{7}$"),
+        "raw_regex": re.compile(r"(?<![A-Z0-9])([A-Z]{1,2}\d{6,7})(?![A-Z0-9])"),
+        "token_regex": re.compile(r"^[A-Z]{1,2}\d{6,7}$"),
         "length": 8,
         "validator": "passport_structure",
-        # NOTE: dropped over-generic words ("type", "ind") that match on many
-        # documents (e.g. a passbook's "Account Type") and caused false positives.
         "keywords": [
             "passport", "republic of india", "place of issue", "country code",
             "nationality", "given name", "surname",
         ],
     },
-
-    # -------------------------------------------------------------------------
-    # BANK DOCUMENTS
-    # -------------------------------------------------------------------------
-    # Bank statements and passbooks don't have a single unique-format ID like the
-    # cards above. What they DO share is an IFSC code (AAAA0XXXXXX), which marks a
-    # document as a "bank document". Telling a statement from a passbook is then a
-    # KEYWORD/PHRASE decision, not an identifier decision - so these two types use
-    # a different scoring path (see classifier._score_bank). The IFSC regex/length
-    # here are used to establish the shared "this is a bank document" signal.
     "BANK_STATEMENT": {
         "display_name": "Bank Statement",
         "doc_class": "bank",
@@ -109,12 +92,10 @@ DOCUMENT_SPECS = {
         "token_regex": re.compile(r"^[A-Z]{4}0[A-Z0-9]{6}$"),
         "length": 11,
         "validator": "ifsc_structure",
-        # shared bank context (also present on passbooks)
         "keywords": [
             "ifsc", "account number", "a/c no", "branch", "micr",
             "bank", "savings", "current account",
         ],
-        # phrases that point specifically to a STATEMENT
         "distinctive": [
             "statement of account", "account statement", "statement period",
             "opening balance", "closing balance", "transaction details",
@@ -134,7 +115,6 @@ DOCUMENT_SPECS = {
             "ifsc", "account number", "a/c no", "branch", "micr",
             "bank", "savings", "current account",
         ],
-        # phrases that point specifically to a PASSBOOK
         "distinctive": [
             "passbook", "pass book", "customer id", "cust id",
             "savings bank account", "sb account", "account holder",
@@ -152,10 +132,6 @@ DOCUMENT_SPECS = {
         "keywords": [
             "ifsc", "bank", "branch", "micr", "neft", "payable",
         ],
-        # phrases that point specifically to a CHEQUE. OCR is noisy on cheques,
-        # so this list favours the markers that survive OCR cleanly (seen across
-        # every variant in real-cheque testing): the validity notice, the date-box
-        # template, "payable at par", and the payee/bearer instruction.
         "distinctive": [
             "valid for three months", "three months only", "months only",
             "payable at par", "ac payee", "a/c payee", "account payee",
@@ -282,7 +258,7 @@ SHAPES = {
     "PAN":      "AAAAA9999A",
     "VOTER_ID": "AAA9999999",
     "DL":       "AA9999999999999",   # canonical 2-letter + 13-digit form
-    "PASSPORT": "A9999999",
+    "PASSPORT": None,          # two shapes possible (A9999999 / AA999999), handled specially
     "BANK_STATEMENT": "AAAA0AAAAAA",  # IFSC: 4 letters + 0 + 6 alnum
     "BANK_PASSBOOK":  "AAAA0AAAAAA",
     "CHEQUE":         "AAAA0AAAAAA",

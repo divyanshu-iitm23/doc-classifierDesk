@@ -130,16 +130,23 @@ def validate_dl(num: str):
 # -----------------------------------------------------------------------------
 # PASSPORT
 # -----------------------------------------------------------------------------
-# Indian passport: 1 letter + 7 digits. Letters Q, X, Z are not used as the prefix.
+# Indian passport: 1 letter + 7 digits  OR  2 letters + 6 digits.
+# Letters Q, X, Z are not used as the first-letter prefix.
 _PASSPORT_EXCLUDED = set("QXZ")
 
 def validate_passport(num: str):
     if len(num) != 8:
         return False, "not 8 characters"
-    if not (num[0].isalpha() and num[1:].isdigit()):
-        return False, "does not match A9999999 shape"
+    # Format 1: 1 letter + 7 digits  (A9999999)
+    fmt1 = num[0].isalpha() and num[1:].isdigit()
+    # Format 2: 2 letters + 6 digits (AA999999)
+    fmt2 = num[:2].isalpha() and num[2:].isdigit()
+    if not (fmt1 or fmt2):
+        return False, "does not match A9999999 or AA999999 shape"
     if num[0] in _PASSPORT_EXCLUDED:
         return False, f"prefix letter '{num[0]}' not used in Indian passports"
+    if fmt2 and not fmt1:
+        return True, f"AA999999 shape OK, prefix '{num[:2]}' valid"
     return True, f"A9999999 shape OK, prefix '{num[0]}' valid"
 
 

@@ -60,9 +60,17 @@ def test_dl_structure():
     assert not validate_dl("917020028130966")[0]       # a cheque MICR number must not pass as a DL
 
 def test_passport_structure():
+    # Format 1: 1 letter + 7 digits
     assert validate_passport("A1234567")[0]
     assert not validate_passport("Q1234567")[0]   # Q excluded
-    assert not validate_passport("AA123456")[0]
+    # Format 2: 2 letters + 6 digits
+    assert validate_passport("AB123456")[0]
+    assert validate_passport("MA123456")[0]
+    assert not validate_passport("QA123456")[0]   # Q excluded (first letter)
+    # Invalid shapes
+    assert not validate_passport("ABC12345")[0]   # 3 letters + 5 digits
+    assert not validate_passport("A123456")[0]    # too short (7 chars)
+    assert not validate_passport("A12345678")[0]  # too long (9 chars)
 
 
 # ---------------------------------------------------------------- classifier
